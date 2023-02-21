@@ -16,9 +16,9 @@ pd.options.mode.chained_assignment = None
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--start_date', type=str, required=True,
-                    help="Start date of sessions for conversion attribution markup")
+                    help="Start date of clicks")
 parser.add_argument('--end_date', type=str, required=True,
-                    help="End date of sessions for conversion attribution markup")
+                    help="End date of clicks")
 
 
 args = parser.parse_args()
