@@ -1,14 +1,16 @@
-#!/usr/bin/env python3 
+#!/usr/bin/env python3
 
 import pandas as pd
 import numpy as np
 import os
 import sqlalchemy
 import argparse
+import json
 from dotenv import load_dotenv
 
-from utils.recommendations import RecommendationEngine
-from utils.recommendations import DataProcessorAll
+from utils.recommendations import RecommendationEngine, DataProcessorAll
+
+from utils.functools import to_dict_not_zero
 
 from params_config_engine import params
 
@@ -17,15 +19,15 @@ pd.options.mode.chained_assignment = None
 parser = argparse.ArgumentParser()
 parser.add_argument('--start_date', type=str, required=True,
                     help="Start date of clicks")
-parser.add_argument('--end_date', type=str, required=True,
-                    help="End date of clicks")
-
+parser.add_argument('--clicks_count', type=str, required=True,
+                    help="Count of last clicks per user")
 
 args = parser.parse_args()
 start_date = args.start_date
-end_date = args.end_date
+clicks_count = args.clicks_count
 
 load_dotenv('.env')
+
 
 def load_engine(base_name: str, engine: str, execution_options: dict):
     host = os.getenv(f'{base_name}_DB_HOST')
@@ -37,49 +39,45 @@ def load_engine(base_name: str, engine: str, execution_options: dict):
     return sqlalchemy.create_engine(connection_str, execution_options={})
 
 
-
 def main():
 
-    engine_affiliates_api = load_engine('MONETHA', 'postgresql', {"stream_results": True})
-    engine_identity_api = load_engine('MONETHA_AFFILIATES', 'postgresql', {"stream_results": True})
+    engine_affiliates_api = load_engine(
+        'MONETHA_AFFILIATES', 'postgresql', {"stream_results": True})
+    engine_identity_api = load_engine(
+        'MONETHA_IDENTITY', 'postgresql', {"stream_results": True})
     engine_save = load_engine('DS', 'postgresql', None)
 
-    q_clicks = f'''
-    select * from affiliates.clicks_id ci
-    left join(
-        select m.id, m.category from affiliates.merchants m 
-    ) m_c on m_c.id = ci.merchant_id
-    where ci.merchant_id is not null and ci.created_at >= {start_date} and ci.created_at < {end_date}
-    '''
-    clicks  = pd.read_sql(q_clicks, engine_affiliates_api)
+    q_clicks = open('sql/clicks_transactions.sql', 'r').read()
+    clicks = pd.read_sql(q_clicks, engine_affiliates_api, params={
+                         "start_date": start_date, "clicks_count": clicks_count})
 
-    q_transactions = f'''
-    select * from affiliates.transactions t 
-    where t.network in ('cj','awin') and t.created_at >= {start_date} and t.created_at < {end_date}
-    '''
-    transactions = pd.read_sql(q_transactions, engine_affiliates_api)
-
-    q_users = '''
-    select * from identity.users u 
-    where u.profile is not null
-    '''
+    q_users = open('sql/users.sql', 'r').read()
     users = pd.read_sql(q_users, engine_identity_api)
 
     dp = DataProcessorAll()
 
-    user_actions, user_primary_interests = dp.process(clicks, transactions, users)
+    user_actions, user_primary_interests = dp.process(clicks, users)
 
     engine_recomendations = RecommendationEngine(
-         **params
+        **params
     )
     weights = engine_recomendations.fit(user_actions, user_primary_interests)
 
-    #TODO : 
-    # 1. How to handle new categories?
-    # 2. Do we update, replace or update table? 
-    weights.to_sql('recomemndation_weights',
-                            con=engine_save, if_exists='append', schema='data')
+    weights_dict = to_dict_not_zero(weights)
 
-if __name__ == "__main__": 
-	main() 
-        
+    user_primary_interests_dict = to_dict_not_zero(user_primary_interests)
+
+    result = pd.DataFrame(
+        data={
+            'weights': json.dumps(weights_dict),
+            'primary_interests': json.dumps(user_primary_interests_dict)
+        },
+        index=[0]
+    )
+
+    result.to_sql('recommendation_logs',
+                  con=engine_save, if_exists='append', schema='data',index=False, dtype={"weights": sqlalchemy.types.JSON, 'primary_interests': sqlalchemy.types.JSON})
+
+
+if __name__ == "__main__":
+    main()

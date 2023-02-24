@@ -15,3 +15,8 @@ def current_next(some_iterable):
     prevs, items, nexts = tee(some_iterable, 3)
     nexts = chain(islice(nexts, 1, None), [None])
     return zip(items, nexts)
+
+def to_dict_not_zero(df):
+    df = df.fillna(0).to_dict(orient='index')
+    df = {k:{k1:v1 for k1, v1 in v.items() if v1 != 0} for k, v in df.items()}
+    return df 

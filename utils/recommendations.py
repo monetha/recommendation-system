@@ -71,29 +71,20 @@ class DataProcessor(object):
             lambda x: x.get('interests', []))
         users_interests = DataFrame(list(users_interests.apply(
             lambda x: Counter(x))), index=users_interests.index)
-
+        users_interests_dict = users.set_index('id')['profile'].apply(lambda x: x.get('interests', []) if x.get('interests', []) != None else [] ).to_dict()
         # TODO : Which categories do we need?
-        users_interests = users_interests.loc[:, 'auto': 'travel']
+#         users_interests = users_interests.loc[:, 'auto': 'travel']
         users_interests = users_interests.divide(
             users_interests.sum(axis=1), axis=0)
-        users_interests['edu'] = None
         users_interests[None] = None
 
-        return users_interests
-
-    def _process_clicks(self, clicks: DataFrame, transactions: DataFrame) -> DataFrame:
-        clicks['is_buy'] = None
-        clicks.loc[clicks.click_uuid.isin(
-            transactions.click_uuid), 'is_buy'] = True
-
-        return clicks
+        return users_interests, users_interests_dict
 
 
 class DataProcessorCorrelation(DataProcessor):
-    def process(self, clicks: DataFrame, transactions: DataFrame, users: DataFrame) -> Tuple[DataFrame, DataFrame]:
+    def process(self, clicks: DataFrame, users: DataFrame) -> Tuple[DataFrame, DataFrame]:
 
-        users_interests = self._process_primary_interests(users)
-        clicks = self._process_clicks(clicks, transactions)
+        users_interests,users_interests_dict = self._process_primary_interests(users)
 
         corr_users = list(set(clicks.user_id) & set(users_interests.index))
 
@@ -110,13 +101,14 @@ class DataProcessorCorrelation(DataProcessor):
 
 
 class DataProcessorAll(DataProcessor):
-    def process(self, clicks: DataFrame, transactions: DataFrame, users: DataFrame) -> Tuple[DataFrame, DataFrame]:
+    
+    
+    def process(self, clicks: DataFrame, users: DataFrame) -> Tuple[DataFrame, DataFrame]:
 
-        users_interests = self._process_primary_interests(users)
-        clicks = self._process_clicks(clicks, transactions)
+        users = users[users['id'].isin(clicks['user_id'].unique())]
+        users_interests,users_interests_dict = self._process_primary_interests(users)
 
-        clicks['is_primary_category'] = clicks.apply(lambda x: 1 if not isnull(
-            users_interests.loc[x.user_id, x.category]) else 0, axis=1)
+        clicks['is_primary_category'] = clicks.apply(lambda x: 1 if x.category in users_interests_dict.get(x.user_id,[]) else 0, axis=1)
 
         return clicks, users_interests
 
@@ -149,7 +141,5 @@ class RecommendationEngine(object):
         weights = user_primary_interests.fillna(
             0).add((users_weights * Fa), fill_value=0)
         weights = weights.divide(weights.sum(axis=1), axis=0)
-
-        weights = weights[weights.loc[:, 'auto':'travel'].sum(axis=1) > 0]
 
         return weights
