@@ -8,7 +8,7 @@ import argparse
 import json
 from dotenv import load_dotenv
 
-from utils.recommendations import RecommendationEngine, DataProcessorAll
+from utils.recommendations import RecommendationEngine, DataProcessorParent
 
 from utils.functools import to_dict_not_zero
 
@@ -54,7 +54,10 @@ def main():
     q_users = open('sql/users.sql', 'r').read()
     users = pd.read_sql(q_users, engine_identity_api)
 
-    dp = DataProcessorAll()
+    q_categories = open('sql/categories.sql', 'r').read()
+    shortlist_cat = pd.read_sql(q_categories, engine_save)
+
+    dp = DataProcessorParent(shortlist_cat)
 
     user_actions, user_primary_interests = dp.process(clicks, users)
 

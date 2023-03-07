@@ -1,6 +1,7 @@
 import itertools
 from collections import Counter
 from pandas import DataFrame, Series, concat, isnull
+import numpy as np
 
 from typing import Tuple
 
@@ -65,19 +66,31 @@ def apply_etalon_diff(x):
 
 
 class DataProcessor(object):
-
-    def _process_primary_interests(self, users: DataFrame) -> DataFrame:
+    @staticmethod
+    def dict_to_df(data_dict : dict) -> DataFrame:
+        series_data = Series(data_dict)
+        return DataFrame(list(series_data.apply(
+            lambda x: Counter(x))), index=series_data.index)
+    
+    def _process_primary_interests(self, users: DataFrame) -> Tuple[DataFrame, DataFrame]:
         users_interests = users.set_index('id')['profile'].apply(
             lambda x: x.get('interests', []))
         users_interests = DataFrame(list(users_interests.apply(
             lambda x: Counter(x))), index=users_interests.index)
         users_interests_dict = users.set_index('id')['profile'].apply(lambda x: x.get('interests', []) if x.get('interests', []) != None else [] ).to_dict()
-        # TODO : Which categories do we need?
-#         users_interests = users_interests.loc[:, 'auto': 'travel']
         users_interests = users_interests.divide(
             users_interests.sum(axis=1), axis=0)
         users_interests[None] = None
+        return users_interests, users_interests_dict
 
+    def _process_primary_interests_non_empty(self, users: DataFrame) -> Tuple[DataFrame, DataFrame]:
+        users_interests, users_interests_dict = self._process_primary_interests(users)
+        users_interests_dict = {key:list(set(value)) for key, value in users_interests_dict.items() if value }
+
+        users_interests = Series(users_interests_dict)
+        users_interests = DataFrame(list(users_interests.apply(
+            lambda x: Counter(x))), index=users_interests.index)
+        
         return users_interests, users_interests_dict
 
 
@@ -112,6 +125,91 @@ class DataProcessorAll(DataProcessor):
 
         return clicks, users_interests
 
+
+
+class DataProcessorParent(DataProcessor):
+    
+    def __init__(self, shortlist_cat: DataFrame):
+        super().__init__()
+        self.buy_fill_func = {
+            0 : lambda x : list(np.zeros(len(x))),
+            1 : lambda x : list(np.ones(len(x))),
+        }
+        self.shortlist_cat = shortlist_cat
+        self._process_categories()
+
+    def _process_categories(self) -> DataFrame:
+        self.categories_dict = self.shortlist_cat.set_index('category_id').to_dict(orient='index')
+
+    
+    def get_primary_parent_id(self,cat_id, parents_list):
+        if self.categories_dict[cat_id]['parent_id']:
+            parents_list.append(cat_id)
+            return parents_list
+        parents_list.append(cat_id)
+        return self.get_primary_parent_id(self.categories_dict[cat_id]['parent_id'], parents_list)   
+
+
+
+    def _parse_parent_clicks(self, clicks: DataFrame):
+        new_list = []
+        buy_list = []
+        for category,is_buy_click in zip(clicks.category.values, clicks.is_buy.values):
+            extented_clicks = self.get_primary_parent_id(category,[])
+            extented_buys = self.buy_fill_func[is_buy_click](extented_clicks)
+            new_list +=extented_clicks
+            buy_list +=extented_buys
+        return DataFrame(
+            data = {'category' : new_list, 'is_buy' : buy_list}
+        )
+        
+
+    def _extend_user_parent_categories(self, categories : list):
+        new_categories_list = []
+        for category in categories:
+            is_shortlist = self.categories_dict.get(category, 0)
+            if is_shortlist:
+                has_parent = is_shortlist.get('parent_id', 0)
+                if has_parent:
+                    new_categories_list += self.get_primary_parent_id(category,[])
+                else:
+                    new_categories_list.append(
+                        category
+                    )                    
+            else:
+                new_categories_list.append(
+                    category
+                )
+        return new_categories_list    
+    
+
+    def process(self, clicks: DataFrame, users: DataFrame) -> Tuple[DataFrame, DataFrame]:
+        
+        users = users[users['id'].isin(clicks['user_id'])]      
+
+        users_interests,users_interests_dict = self._process_primary_interests_non_empty(users)
+
+        for user_id in users_interests_dict.keys():
+            new_cats = self._extend_user_parent_categories(users_interests_dict[user_id])
+            users_interests_dict[user_id] = new_cats
+
+        users_interests = super().dict_to_df(users_interests_dict)
+        
+        categories_with_parent = self.shortlist_cat[self.shortlist_cat['parent_id'] == 0]['category_id']
+        non_parent_clicks = clicks[~clicks['category'].isin(categories_with_parent)]
+        parent_clicks = clicks[clicks['category'].isin(categories_with_parent)]
+
+        if not parent_clicks.empty:
+            parent_clicks = parent_clicks.groupby('user_id').apply(self._parse_parent_clicks).reset_index().drop(columns = ['level_1'])
+
+        clicks = concat(
+            [non_parent_clicks,parent_clicks]
+        )
+
+        clicks['is_primary_category'] = clicks.apply(lambda x: 1 if x.category in users_interests_dict.get(x.user_id,[]) else 0, axis=1)
+
+        return clicks, users_interests
+        
 
 class RecommendationEngine(object):
     def __init__(self, Fp_click: list, Fp_purchase: list, Fi: list, Fa: list) -> DataFrame:
