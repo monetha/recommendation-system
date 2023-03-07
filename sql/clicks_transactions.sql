@@ -1,8 +1,12 @@
-select user_id, created_at,category,is_buy  from (
+select user_id,category,is_buy  from (
     select
     ci.*,
     m_c.category,
-    t_new.is_buy,
+
+    (CASE
+        WHEN t_new.is_buy IS NULL THEN 0
+        ELSE 1
+        END) AS is_buy,
     row_number() over (partition by ci.user_id order by created_at desc) seqnum 
     from affiliates.clicks_id ci
     

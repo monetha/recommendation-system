@@ -7,7 +7,12 @@ Creates weight matrix with :
 
 Start params  
 ```bash
-python primary-interests-events-mark.py --help
+python3 primary_interests_events_mark.py --help
 ```  
 
-DS-instance execution path `/home/ubuntu/recommendation-system/primary-interests-events-mark.py`
+DS-instance execution path `/home/ubuntu/recommendation-system/primary_interests_events_mark.py`
+
+Generate proper version of categories shortlist(will be both saved localy and to DS instance). Start params:
+```bash
+python3 convert_shortlist.py --help
+```  
